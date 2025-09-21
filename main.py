@@ -1,23 +1,31 @@
-from telegram import Update
-from telegram.ext import Updater, CallbackContext, MessageHandler, Filters
+from fastapi import FastAPI, Request, HTTPException
+import os
+from redis import Redis
+from rq import Queue
 
-def channel_post_handler(update: Update, context: CallbackContext):
-    chat_id = update.channel_post.chat_id
-    pesan = update.channel_post.text
-    print(f"Pesan channel diterima dari chat ID {chat_id}: {pesan}")
+app = FastAPI()
 
-    context.bot.send_message(chat_id=chat_id, text=f"ID channel ini adalah: {chat_id}")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
-def main():
-    BOT_TOKEN = "8167264410:AAHYQgPVe_HyqIQLxZ6yuGFABWCw5Bb-P74"
-    updater = Updater(BOT_TOKEN, use_context=True)
-    dp = updater.dispatcher
-    
-    dp.add_handler(MessageHandler(Filters.chat_type.channel, channel_post_handler))
-    
-    updater.start_polling()
-    print("Bot berjalan, siap mendeteksi pesan di channel...")
-    updater.idle()
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN environment variable is required")
 
-if name == "main":
-    main()
+# koneksi Redis & queue
+redis_conn = Redis.from_url(REDIS_URL)
+q = Queue(connection=redis_conn)
+
+@app.post("/webhook/{token}")
+async def webhook(token: str, request: Request):
+    if token != BOT_TOKEN:
+        raise HTTPException(status_code=403, detail="Invalid token")
+
+    update = await request.json()
+    # enqueue ke worker
+    q.enqueue("worker.process_update", update, job_timeout=60)
+
+    return {"ok": True}
+
+@app.get("/")
+async def index():
+    return {"status": "ok"}
